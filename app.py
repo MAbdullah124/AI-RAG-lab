@@ -1,6 +1,8 @@
-import streamlit as st
 import os
 import re
+import json
+
+import streamlit as st
 import numpy as np
 import faiss
 
@@ -11,66 +13,29 @@ from docx import Document
 
 
 # =========================================================
-# PAGE CONFIGURATION
+# PAGE CONFIG
 # =========================================================
 
 st.set_page_config(
-    page_title="AI RAG Tool Lab",
+    page_title="Agentic RAG Lab",
     page_icon="🤖",
     layout="wide"
 )
 
 
 # =========================================================
-# CUSTOM CSS
+# HEADER
 # =========================================================
 
-st.markdown(
-    """
-    <style>
-    .main-title {
-        font-size: 40px;
-        font-weight: 700;
-        margin-bottom: 5px;
-    }
+st.title("🤖 Agentic RAG Lab")
 
-    .subtitle {
-        font-size: 18px;
-        color: #777;
-        margin-bottom: 25px;
-    }
-
-    .tool-box {
-        padding: 15px;
-        border-radius: 10px;
-        border: 1px solid #ddd;
-        margin-bottom: 10px;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True
+st.caption(
+    "RAG + Tool Calling + Agent Loop"
 )
 
 
 # =========================================================
-# TITLE
-# =========================================================
-
-st.markdown(
-    '<div class="main-title">🤖 AI RAG + Tool Calling Lab</div>',
-    unsafe_allow_html=True
-)
-
-st.markdown(
-    '<div class="subtitle">'
-    'Learning RAG, tool calling, and agent-style decision making'
-    '</div>',
-    unsafe_allow_html=True
-)
-
-
-# =========================================================
-# API KEY
+# GROQ API
 # =========================================================
 
 try:
@@ -81,12 +46,22 @@ except Exception:
 
 if not GROQ_API_KEY:
     st.error(
-        "GROQ_API_KEY is missing. Add it to Streamlit Secrets."
+        "GROQ_API_KEY not found. "
+        "Add it to Streamlit Secrets."
     )
     st.stop()
 
 
-client = Groq(api_key=GROQ_API_KEY)
+client = Groq(
+    api_key=GROQ_API_KEY
+)
+
+
+# =========================================================
+# MODEL
+# =========================================================
+
+MODEL_NAME = "openai/gpt-oss-120b"
 
 
 # =========================================================
@@ -95,7 +70,10 @@ client = Groq(api_key=GROQ_API_KEY)
 
 @st.cache_resource
 def load_embedding_model():
-    return SentenceTransformer("all-MiniLM-L6-v2")
+
+    return SentenceTransformer(
+        "all-MiniLM-L6-v2"
+    )
 
 
 embedding_model = load_embedding_model()
@@ -108,9 +86,6 @@ embedding_model = load_embedding_model()
 if "chunks" not in st.session_state:
     st.session_state.chunks = []
 
-if "embeddings" not in st.session_state:
-    st.session_state.embeddings = None
-
 if "index" not in st.session_state:
     st.session_state.index = None
 
@@ -120,17 +95,22 @@ if "document_name" not in st.session_state:
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+if "agent_logs" not in st.session_state:
+    st.session_state.agent_logs = []
+
 
 # =========================================================
 # DOCUMENT EXTRACTION
 # =========================================================
 
 def extract_pdf(file):
+
     reader = PdfReader(file)
 
     text = ""
 
     for page in reader.pages:
+
         page_text = page.extract_text()
 
         if page_text:
@@ -140,31 +120,44 @@ def extract_pdf(file):
 
 
 def extract_docx(file):
+
     document = Document(file)
 
     text = ""
 
     for paragraph in document.paragraphs:
-        text += paragraph.text + "\n"
+
+        if paragraph.text.strip():
+
+            text += paragraph.text + "\n"
 
     return text
 
 
 def extract_txt(file):
-    return file.read().decode("utf-8")
+
+    return file.read().decode(
+        "utf-8"
+    )
 
 
 # =========================================================
-# TEXT CLEANING
+# CLEAN TEXT
 # =========================================================
 
 def clean_text(text):
-    text = re.sub(r"\s+", " ", text)
+
+    text = re.sub(
+        r"\s+",
+        " ",
+        text
+    )
+
     return text.strip()
 
 
 # =========================================================
-# CHUNKING
+# CREATE CHUNKS
 # =========================================================
 
 def create_chunks(
@@ -172,6 +165,7 @@ def create_chunks(
     chunk_size=700,
     overlap=100
 ):
+
     words = text.split()
 
     chunks = []
@@ -182,18 +176,23 @@ def create_chunks(
 
         end = start + chunk_size
 
-        chunk = " ".join(words[start:end])
+        chunk = " ".join(
+            words[start:end]
+        )
 
         if chunk.strip():
+
             chunks.append(chunk)
 
-        start += chunk_size - overlap
+        start += (
+            chunk_size - overlap
+        )
 
     return chunks
 
 
 # =========================================================
-# BUILD VECTOR DATABASE
+# CREATE VECTOR DATABASE
 # =========================================================
 
 def build_vector_database(chunks):
@@ -206,23 +205,33 @@ def build_vector_database(chunks):
 
     dimension = embeddings.shape[1]
 
-    index = faiss.IndexFlatIP(dimension)
+    index = faiss.IndexFlatIP(
+        dimension
+    )
 
-    index.add(embeddings.astype("float32"))
+    index.add(
+        embeddings.astype(
+            "float32"
+        )
+    )
 
-    return index, embeddings
+    return index
 
 
 # =========================================================
-# RAG SEARCH TOOL
+# RAG SEARCH
 # =========================================================
 
-def rag_search(query, top_k=4):
+def rag_search(
+    query,
+    top_k=4
+):
 
     if (
         st.session_state.index is None
         or not st.session_state.chunks
     ):
+
         return []
 
     query_embedding = embedding_model.encode(
@@ -231,23 +240,30 @@ def rag_search(query, top_k=4):
         normalize_embeddings=True
     )
 
-    scores, indices = st.session_state.index.search(
-        query_embedding.astype("float32"),
-        top_k
+    scores, indices = (
+        st.session_state.index.search(
+            query_embedding.astype(
+                "float32"
+            ),
+            top_k
+        )
     )
 
     results = []
 
-    for score, index in zip(scores[0], indices[0]):
+    for score, idx in zip(
+        scores[0],
+        indices[0]
+    ):
 
-        if index == -1:
+        if idx == -1:
             continue
 
         results.append(
             {
-                "chunk": st.session_state.chunks[index],
+                "chunk": st.session_state.chunks[idx],
                 "score": float(score),
-                "index": int(index)
+                "index": int(idx)
             }
         )
 
@@ -255,7 +271,7 @@ def rag_search(query, top_k=4):
 
 
 # =========================================================
-# CALCULATOR TOOL
+# CALCULATOR
 # =========================================================
 
 def calculator(expression):
@@ -264,78 +280,114 @@ def calculator(expression):
 
         expression = expression.strip()
 
-        # Allow only mathematical characters
+        # Only allow safe mathematical characters
         if not re.fullmatch(
             r"[0-9+\-*/().%\s]+",
             expression
         ):
-            return "Invalid mathematical expression."
 
-        # Convert percentage
-        expression = expression.replace("%", "/100")
+            return (
+                "Invalid mathematical expression."
+            )
+
+        expression = expression.replace(
+            "%",
+            "/100"
+        )
 
         result = eval(
             expression,
-            {"__builtins__": None},
+            {
+                "__builtins__": None
+            },
             {}
         )
 
         return str(result)
 
     except Exception:
-        return "Could not calculate the expression."
+
+        return (
+            "Could not calculate "
+            "the expression."
+        )
 
 
 # =========================================================
 # TOOL DEFINITIONS
 # =========================================================
 
-tools = [
+TOOLS = [
+
     {
         "type": "function",
+
         "function": {
+
             "name": "rag_search",
+
             "description": (
-                "Search the uploaded documents for relevant "
-                "information. Use this when the user's question "
-                "requires information from the uploaded document."
+                "Search the uploaded document "
+                "for information relevant to "
+                "the user's question."
             ),
+
             "parameters": {
+
                 "type": "object",
+
                 "properties": {
+
                     "query": {
+
                         "type": "string",
+
                         "description": (
-                            "The search query to find relevant "
-                            "information in the document."
+                            "A focused search query "
+                            "for the uploaded document."
                         )
                     }
                 },
-                "required": ["query"]
+
+                "required": [
+                    "query"
+                ]
             }
         }
     },
+
     {
         "type": "function",
+
         "function": {
+
             "name": "calculator",
+
             "description": (
-                "Perform mathematical calculations. Use this "
-                "when the user asks for arithmetic or numerical "
-                "calculation."
+                "Perform mathematical calculations."
             ),
+
             "parameters": {
+
                 "type": "object",
+
                 "properties": {
+
                     "expression": {
+
                         "type": "string",
+
                         "description": (
-                            "Mathematical expression such as "
-                            "25 * 4 or (100 + 50) / 3."
+                            "A mathematical expression "
+                            "such as 25 * 10 or "
+                            "(100 + 50) / 3."
                         )
                     }
                 },
-                "required": ["expression"]
+
+                "required": [
+                    "expression"
+                ]
             }
         }
     }
@@ -343,76 +395,152 @@ tools = [
 
 
 # =========================================================
-# EXECUTE TOOL
+# EXECUTE RAG TOOL
 # =========================================================
 
-def execute_tool(tool_name, arguments):
+def execute_rag_tool(
+    query,
+    top_k=4
+):
+
+    results = rag_search(
+        query,
+        top_k
+    )
+
+    if not results:
+
+        return (
+            "No relevant information "
+            "was found in the document."
+        )
+
+    output = []
+
+    for i, result in enumerate(
+        results,
+        start=1
+    ):
+
+        output.append(
+            f"Result {i} "
+            f"(similarity: "
+            f"{result['score']:.3f})\n"
+            f"{result['chunk']}"
+        )
+
+    return "\n\n".join(
+        output
+    )
+
+
+# =========================================================
+# EXECUTE ANY TOOL
+# =========================================================
+
+def execute_tool(
+    tool_name,
+    arguments,
+    top_k
+):
 
     if tool_name == "rag_search":
 
-        query = arguments.get("query", "")
-
-        results = rag_search(
-            query,
-            top_k=4
+        query = arguments.get(
+            "query",
+            ""
         )
 
-        if not results:
-            return "No relevant information was found."
+        return execute_rag_tool(
+            query,
+            top_k
+        )
 
-        output = []
-
-        for i, result in enumerate(results, start=1):
-
-            output.append(
-                f"Result {i} "
-                f"(similarity: {result['score']:.3f}):\n"
-                f"{result['chunk']}"
-            )
-
-        return "\n\n".join(output)
-
-    elif tool_name == "calculator":
+    if tool_name == "calculator":
 
         expression = arguments.get(
             "expression",
             ""
         )
 
-        return calculator(expression)
+        return calculator(
+            expression
+        )
 
     return "Unknown tool."
 
 
 # =========================================================
-# AGENT / TOOL CALLING
+# AGENT
 # =========================================================
 
-def ask_agent(user_question):
+def run_agent(
+    user_question,
+    top_k=4,
+    max_iterations=5
+):
+
+    # ---------------------------------------------
+    # AGENT LOG
+    # ---------------------------------------------
+
+    agent_logs = []
+
+    # ---------------------------------------------
+    # SYSTEM MESSAGE
+    # ---------------------------------------------
+
+    system_message = """
+You are an intelligent Agentic RAG assistant.
+
+You have access to two tools:
+
+1. rag_search
+   - Searches information inside the uploaded document.
+
+2. calculator
+   - Performs mathematical calculations.
+
+Your job is to decide what action is required.
+
+Use rag_search when the answer depends on the uploaded
+document.
+
+Use calculator when a mathematical calculation is needed.
+
+You may call tools multiple times.
+
+After receiving a tool result, analyze it and decide
+whether another tool is necessary.
+
+Do not call tools unnecessarily.
+
+When you have enough information, provide the final
+answer directly.
+
+If the uploaded document does not contain the requested
+information, clearly say that the information was not
+found.
+
+Do not invent information from the document.
+"""
 
     messages = [
+
         {
             "role": "system",
-            "content": (
-                "You are an intelligent AI assistant. "
-                "You have access to two tools: "
-                "RAG document search and calculator. "
-                "\n\n"
-                "Use RAG search when the answer depends on "
-                "the uploaded document. "
-                "\n\n"
-                "Use calculator when mathematical calculation "
-                "is required. "
-                "\n\n"
-                "You may use tools when necessary. "
-                "After receiving tool results, provide a clear "
-                "final answer to the user."
-            )
+            "content": system_message
         }
+
     ]
 
-    # Add conversation history
-    for message in st.session_state.messages[-6:]:
+    # ---------------------------------------------
+    # ADD RECENT CONVERSATION
+    # ---------------------------------------------
+
+    for message in (
+        st.session_state.messages[-6:]
+    ):
 
         messages.append(
             {
@@ -421,6 +549,10 @@ def ask_agent(user_question):
             }
         )
 
+    # ---------------------------------------------
+    # CURRENT USER QUESTION
+    # ---------------------------------------------
+
     messages.append(
         {
             "role": "user",
@@ -428,116 +560,236 @@ def ask_agent(user_question):
         }
     )
 
-    # =====================================================
-    # FIRST AI REQUEST
-    # =====================================================
+    # =============================================
+    # AGENT LOOP
+    # =============================================
 
-    response = client.chat.completions.create(
+    for iteration in range(
+        max_iterations
+    ):
 
-        model="openai/gpt-oss-120b",
+        agent_logs.append(
+            {
+                "type": "thinking",
+                "iteration": iteration + 1,
+                "message": (
+                    f"Agent iteration "
+                    f"{iteration + 1}"
+                )
+            }
+        )
 
-        messages=messages,
+        # -----------------------------------------
+        # ASK MODEL
+        # -----------------------------------------
 
-        tools=tools,
+        response = (
+            client.chat.completions.create(
 
-        tool_choice="auto",
+                model=MODEL_NAME,
 
-        temperature=0.2,
+                messages=messages,
 
-        max_tokens=1200
-    )
+                tools=TOOLS,
 
-    assistant_message = response.choices[0].message
+                tool_choice="auto",
 
-    # =====================================================
-    # NO TOOL REQUIRED
-    # =====================================================
+                temperature=0.2,
 
-    if not assistant_message.tool_calls:
+                max_tokens=1200
+            )
+        )
 
-        return assistant_message.content, []
+        assistant_message = (
+            response.choices[0].message
+        )
 
+        # -----------------------------------------
+        # NO TOOL CALL
+        # -----------------------------------------
 
-    # =====================================================
-    # TOOL CALLS
-    # =====================================================
+        if not assistant_message.tool_calls:
 
-    messages.append(
-        {
-            "role": "assistant",
-            "content": assistant_message.content or "",
-            "tool_calls": [
+            final_answer = (
+                assistant_message.content
+            )
+
+            if not final_answer:
+
+                final_answer = (
+                    "I could not generate "
+                    "a final answer."
+                )
+
+            agent_logs.append(
+                {
+                    "type": "final",
+                    "iteration": iteration + 1,
+                    "message": "Agent produced final answer."
+                }
+            )
+
+            return (
+                final_answer,
+                agent_logs
+            )
+
+        # -----------------------------------------
+        # SAVE ASSISTANT TOOL CALL
+        # -----------------------------------------
+
+        tool_call_data = []
+
+        for tool_call in (
+            assistant_message.tool_calls
+        ):
+
+            tool_call_data.append(
                 {
                     "id": tool_call.id,
                     "type": "function",
                     "function": {
-                        "name": tool_call.function.name,
-                        "arguments": tool_call.function.arguments
+                        "name": (
+                            tool_call.function.name
+                        ),
+                        "arguments": (
+                            tool_call.function.arguments
+                        )
                     }
                 }
-                for tool_call in assistant_message.tool_calls
-            ]
-        }
-    )
-
-    tool_results = []
-
-    # =====================================================
-    # EXECUTE EACH TOOL
-    # =====================================================
-
-    for tool_call in assistant_message.tool_calls:
-
-        tool_name = tool_call.function.name
-
-        arguments = tool_call.function.arguments
-
-        import json
-
-        try:
-            arguments = json.loads(arguments)
-        except Exception:
-            arguments = {}
-
-        result = execute_tool(
-            tool_name,
-            arguments
-        )
-
-        tool_results.append(
-            {
-                "tool": tool_name,
-                "arguments": arguments,
-                "result": result
-            }
-        )
+            )
 
         messages.append(
             {
-                "role": "tool",
-                "tool_call_id": tool_call.id,
-                "content": result
+                "role": "assistant",
+                "content": (
+                    assistant_message.content
+                    or ""
+                ),
+                "tool_calls": tool_call_data
             }
         )
 
-    # =====================================================
-    # SECOND AI REQUEST
-    # =====================================================
+        # -----------------------------------------
+        # EXECUTE TOOLS
+        # -----------------------------------------
 
-    final_response = client.chat.completions.create(
+        for tool_call in (
+            assistant_message.tool_calls
+        ):
 
-        model="openai/gpt-oss-120b",
+            tool_name = (
+                tool_call.function.name
+            )
 
-        messages=messages,
+            raw_arguments = (
+                tool_call.function.arguments
+            )
 
-        temperature=0.2,
+            try:
 
-        max_tokens=1200
+                arguments = json.loads(
+                    raw_arguments
+                )
+
+            except Exception:
+
+                arguments = {}
+
+            # -------------------------------------
+            # LOG TOOL CALL
+            # -------------------------------------
+
+            agent_logs.append(
+                {
+                    "type": "tool",
+                    "iteration": iteration + 1,
+                    "tool": tool_name,
+                    "arguments": arguments
+                }
+            )
+
+            # -------------------------------------
+            # RUN TOOL
+            # -------------------------------------
+
+            result = execute_tool(
+                tool_name,
+                arguments,
+                top_k
+            )
+
+            # -------------------------------------
+            # LOG RESULT
+            # -------------------------------------
+
+            agent_logs.append(
+                {
+                    "type": "result",
+                    "iteration": iteration + 1,
+                    "tool": tool_name,
+                    "result": result
+                }
+            )
+
+            # -------------------------------------
+            # SEND RESULT BACK TO MODEL
+            # -------------------------------------
+
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": (
+                        tool_call.id
+                    ),
+                    "content": result
+                }
+            )
+
+    # =============================================
+    # MAX ITERATIONS REACHED
+    # =============================================
+
+    agent_logs.append(
+        {
+            "type": "limit",
+            "message": (
+                "Maximum agent iterations reached."
+            )
+        }
     )
 
-    final_answer = final_response.choices[0].message.content
+    # Ask the model for a final response
+    # based on everything collected so far.
 
-    return final_answer, tool_results
+    final_response = (
+        client.chat.completions.create(
+
+            model=MODEL_NAME,
+
+            messages=messages,
+
+            temperature=0.2,
+
+            max_tokens=1200
+        )
+    )
+
+    final_answer = (
+        final_response.choices[0].message.content
+    )
+
+    if not final_answer:
+
+        final_answer = (
+            "The agent reached its maximum "
+            "number of steps."
+        )
+
+    return (
+        final_answer,
+        agent_logs
+    )
 
 
 # =========================================================
@@ -546,68 +798,88 @@ def ask_agent(user_question):
 
 with st.sidebar:
 
-    st.header("⚙️ RAG Settings")
+    st.header("⚙️ Agent Settings")
 
     top_k = st.slider(
-        "Retrieved chunks",
+        "RAG results",
         min_value=1,
         max_value=8,
         value=4
     )
 
+    max_iterations = st.slider(
+        "Maximum agent steps",
+        min_value=1,
+        max_value=8,
+        value=5
+    )
+
     st.divider()
 
-    st.header("📄 Document")
+    st.header("📄 Upload Document")
 
     uploaded_file = st.file_uploader(
-        "Upload PDF, DOCX or TXT",
-        type=["pdf", "docx", "txt"]
+        "PDF, DOCX or TXT",
+        type=[
+            "pdf",
+            "docx",
+            "txt"
+        ]
     )
 
     if uploaded_file:
 
         st.write(
-            f"**File:** {uploaded_file.name}"
+            f"**File:** "
+            f"{uploaded_file.name}"
         )
 
-        process_button = st.button(
+        if st.button(
             "🔄 Process Document",
             use_container_width=True
-        )
-
-        if process_button:
+        ):
 
             with st.spinner(
-                "Reading and indexing document..."
+                "Processing document..."
             ):
 
                 try:
 
-                    if uploaded_file.name.lower().endswith(
+                    filename = (
+                        uploaded_file.name.lower()
+                    )
+
+                    if filename.endswith(
                         ".pdf"
                     ):
+
                         text = extract_pdf(
                             uploaded_file
                         )
 
-                    elif uploaded_file.name.lower().endswith(
+                    elif filename.endswith(
                         ".docx"
                     ):
+
                         text = extract_docx(
                             uploaded_file
                         )
 
                     else:
+
                         text = extract_txt(
                             uploaded_file
                         )
 
-                    text = clean_text(text)
+                    text = clean_text(
+                        text
+                    )
 
                     if not text:
 
                         st.error(
-                            "No readable text found."
+                            "No readable text "
+                            "was found."
                         )
 
                     else:
@@ -616,26 +888,26 @@ with st.sidebar:
                             text
                         )
 
-                        index, embeddings = (
+                        index = (
                             build_vector_database(
                                 chunks
                             )
                         )
 
-                        st.session_state.chunks = chunks
-
-                        st.session_state.embeddings = (
-                            embeddings
+                        st.session_state.chunks = (
+                            chunks
                         )
 
-                        st.session_state.index = index
+                        st.session_state.index = (
+                            index
+                        )
 
                         st.session_state.document_name = (
                             uploaded_file.name
                         )
 
                         st.success(
-                            "Document indexed successfully!"
+                            "Document processed!"
                         )
 
                 except Exception as e:
@@ -644,13 +916,9 @@ with st.sidebar:
                         f"Processing error: {e}"
                     )
 
-    # =====================================================
-    # TOOL STATUS
-    # =====================================================
-
     st.divider()
 
-    st.header("🛠️ Available Tools")
+    st.header("🧠 Agent Tools")
 
     st.success("🔎 RAG Search")
 
@@ -658,7 +926,7 @@ with st.sidebar:
 
     st.divider()
 
-    if st.session_state.index is not None:
+    if st.session_state.index:
 
         st.info(
             f"Document: "
@@ -670,44 +938,48 @@ with st.sidebar:
     else:
 
         st.warning(
-            "Upload and process a document first."
+            "No document loaded."
         )
 
 
 # =========================================================
-# MAIN TOOL EXPLANATION
+# MAIN INFORMATION
 # =========================================================
 
-col1, col2 = st.columns(2)
+col1, col2, col3 = st.columns(3)
 
 with col1:
 
-    st.markdown(
-        """
-        ### 🔎 RAG Search
-
-        The AI can search your uploaded document when
-        it needs external knowledge.
-        """
+    st.metric(
+        "RAG",
+        "Active"
     )
 
 with col2:
 
-    st.markdown(
-        """
-        ### 🧮 Calculator
-
-        The AI can call a calculator when a numerical
-        calculation is required.
-        """
+    st.metric(
+        "Tools",
+        "2"
     )
+
+with col3:
+
+    st.metric(
+        "Agent",
+        "Active"
+    )
+
+
+st.divider()
 
 
 # =========================================================
 # CHAT HISTORY
 # =========================================================
 
-for message in st.session_state.messages:
+for message in (
+    st.session_state.messages
+):
 
     with st.chat_message(
         message["role"]
@@ -719,28 +991,58 @@ for message in st.session_state.messages:
 
         if (
             message["role"] == "assistant"
-            and message.get("tools")
+            and message.get("agent_logs")
         ):
 
             with st.expander(
-                "🛠️ Tool activity"
+                "🧠 View Agent Activity"
             ):
 
-                for tool in message["tools"]:
+                for log in (
+                    message["agent_logs"]
+                ):
 
-                    st.write(
-                        f"**Tool:** {tool['tool']}"
-                    )
+                    if log["type"] == "thinking":
 
-                    st.write(
-                        f"**Arguments:** "
-                        f"{tool['arguments']}"
-                    )
+                        st.write(
+                            f"🔄 "
+                            f"{log['message']}"
+                        )
 
-                    st.write(
-                        f"**Result:** "
-                        f"{tool['result']}"
-                    )
+                    elif log["type"] == "tool":
+
+                        st.write(
+                            f"🛠️ Tool: "
+                            f"{log['tool']}"
+                        )
+
+                        st.write(
+                            f"Arguments: "
+                            f"{log['arguments']}"
+                        )
+
+                    elif log["type"] == "result":
+
+                        st.write(
+                            f"📋 "
+                            f"{log['tool']} result:"
+                        )
+
+                        st.code(
+                            log["result"]
+                        )
+
+                    elif log["type"] == "final":
+
+                        st.write(
+                            "✅ Agent completed."
+                        )
+
+                    elif log["type"] == "limit":
+
+                        st.warning(
+                            log["message"]
+                        )
 
 
 # =========================================================
@@ -748,15 +1050,15 @@ for message in st.session_state.messages:
 # =========================================================
 
 user_question = st.chat_input(
-    "Ask something..."
+    "Ask the Agent..."
 )
 
 
 if user_question:
 
-    # -----------------------------------------------------
-    # USER MESSAGE
-    # -----------------------------------------------------
+    # ---------------------------------------------
+    # DISPLAY USER
+    # ---------------------------------------------
 
     st.session_state.messages.append(
         {
@@ -765,68 +1067,101 @@ if user_question:
         }
     )
 
-    with st.chat_message("user"):
+    with st.chat_message(
+        "user"
+    ):
 
         st.markdown(
             user_question
         )
 
-    # -----------------------------------------------------
-    # AI RESPONSE
-    # -----------------------------------------------------
+    # ---------------------------------------------
+    # RUN AGENT
+    # ---------------------------------------------
 
-    with st.chat_message("assistant"):
+    with st.chat_message(
+        "assistant"
+    ):
 
         with st.spinner(
-            "AI is thinking and selecting tools..."
+            "🧠 Agent is working..."
         ):
 
             try:
 
-                answer, tool_results = ask_agent(
-                    user_question
+                answer, agent_logs = (
+                    run_agent(
+                        user_question,
+                        top_k,
+                        max_iterations
+                    )
                 )
 
                 st.markdown(
                     answer
                 )
 
-                # -----------------------------------------
-                # TOOL ACTIVITY
-                # -----------------------------------------
+                # ---------------------------------
+                # SHOW AGENT ACTIVITY
+                # ---------------------------------
 
-                if tool_results:
+                with st.expander(
+                    "🧠 View Agent Activity"
+                ):
 
-                    with st.expander(
-                        "🛠️ Tool activity"
-                    ):
+                    for log in agent_logs:
 
-                        for tool in tool_results:
+                        if log["type"] == "thinking":
 
                             st.write(
-                                f"**Tool:** "
-                                f"{tool['tool']}"
+                                f"🔄 "
+                                f"{log['message']}"
+                            )
+
+                        elif log["type"] == "tool":
+
+                            st.write(
+                                f"🛠️ "
+                                f"{log['tool']}"
                             )
 
                             st.write(
-                                f"**Arguments:** "
-                                f"{tool['arguments']}"
+                                f"Arguments: "
+                                f"{log['arguments']}"
                             )
+
+                        elif log["type"] == "result":
 
                             st.write(
-                                f"**Result:** "
-                                f"{tool['result']}"
+                                f"📋 "
+                                f"{log['tool']} result"
                             )
 
-                # -----------------------------------------
-                # SAVE ASSISTANT MESSAGE
-                # -----------------------------------------
+                            st.code(
+                                log["result"]
+                            )
+
+                        elif log["type"] == "final":
+
+                            st.success(
+                                "Agent completed."
+                            )
+
+                        elif log["type"] == "limit":
+
+                            st.warning(
+                                log["message"]
+                            )
+
+                # ---------------------------------
+                # SAVE RESPONSE
+                # ---------------------------------
 
                 st.session_state.messages.append(
                     {
                         "role": "assistant",
                         "content": answer,
-                        "tools": tool_results
+                        "agent_logs": agent_logs
                     }
                 )
 
@@ -844,6 +1179,6 @@ if user_question:
                     {
                         "role": "assistant",
                         "content": error_message,
-                        "tools": []
+                        "agent_logs": []
                     }
                 )

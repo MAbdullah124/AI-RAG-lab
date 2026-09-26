@@ -1,12 +1,13 @@
-import os
 import streamlit as st
+import os
+import re
 import numpy as np
 import faiss
 
+from groq import Groq
 from sentence_transformers import SentenceTransformer
 from pypdf import PdfReader
 from docx import Document
-from groq import Groq
 
 
 # =========================================================
@@ -14,8 +15,8 @@ from groq import Groq
 # =========================================================
 
 st.set_page_config(
-    page_title="AI RAG Lab",
-    page_icon="🧠",
+    page_title="AI RAG Tool Lab",
+    page_icon="🤖",
     layout="wide"
 )
 
@@ -24,38 +25,31 @@ st.set_page_config(
 # CUSTOM CSS
 # =========================================================
 
-st.markdown("""
-<style>
+st.markdown(
+    """
+    <style>
+    .main-title {
+        font-size: 40px;
+        font-weight: 700;
+        margin-bottom: 5px;
+    }
 
-.main-title {
-    font-size: 40px;
-    font-weight: 700;
-    text-align: center;
-    margin-bottom: 5px;
-}
+    .subtitle {
+        font-size: 18px;
+        color: #777;
+        margin-bottom: 25px;
+    }
 
-.subtitle {
-    text-align: center;
-    color: #777;
-    margin-bottom: 30px;
-}
-
-.answer-box {
-    padding: 20px;
-    border-radius: 12px;
-    border: 1px solid #ddd;
-    margin-top: 15px;
-}
-
-.chunk-box {
-    padding: 15px;
-    border-radius: 10px;
-    border: 1px solid #ddd;
-    margin-bottom: 12px;
-}
-
-</style>
-""", unsafe_allow_html=True)
+    .tool-box {
+        padding: 15px;
+        border-radius: 10px;
+        border: 1px solid #ddd;
+        margin-bottom: 10px;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
 
 
 # =========================================================
@@ -63,20 +57,20 @@ st.markdown("""
 # =========================================================
 
 st.markdown(
-    '<div class="main-title">🧠 AI RAG Lab</div>',
+    '<div class="main-title">🤖 AI RAG + Tool Calling Lab</div>',
     unsafe_allow_html=True
 )
 
 st.markdown(
     '<div class="subtitle">'
-    'Learn Retrieval-Augmented Generation with Groq + FAISS'
+    'Learning RAG, tool calling, and agent-style decision making'
     '</div>',
     unsafe_allow_html=True
 )
 
 
 # =========================================================
-# GROQ API KEY
+# API KEY
 # =========================================================
 
 try:
@@ -86,34 +80,22 @@ except Exception:
 
 
 if not GROQ_API_KEY:
-
     st.error(
-        "Groq API key not found. "
-        "Add GROQ_API_KEY to your Streamlit secrets."
+        "GROQ_API_KEY is missing. Add it to Streamlit Secrets."
     )
-
     st.stop()
 
 
-# =========================================================
-# GROQ CLIENT
-# =========================================================
-
-client = Groq(
-    api_key=GROQ_API_KEY
-)
+client = Groq(api_key=GROQ_API_KEY)
 
 
 # =========================================================
-# LOAD EMBEDDING MODEL
+# EMBEDDING MODEL
 # =========================================================
 
 @st.cache_resource
 def load_embedding_model():
-
-    return SentenceTransformer(
-        "all-MiniLM-L6-v2"
-    )
+    return SentenceTransformer("all-MiniLM-L6-v2")
 
 
 embedding_model = load_embedding_model()
@@ -124,99 +106,65 @@ embedding_model = load_embedding_model()
 # =========================================================
 
 if "chunks" not in st.session_state:
-
     st.session_state.chunks = []
 
+if "embeddings" not in st.session_state:
+    st.session_state.embeddings = None
 
-if "faiss_index" not in st.session_state:
-
-    st.session_state.faiss_index = None
-
+if "index" not in st.session_state:
+    st.session_state.index = None
 
 if "document_name" not in st.session_state:
-
     st.session_state.document_name = None
+
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
 
 # =========================================================
-# PDF TEXT EXTRACTION
+# DOCUMENT EXTRACTION
 # =========================================================
 
 def extract_pdf(file):
+    reader = PdfReader(file)
 
     text = ""
 
-    reader = PdfReader(file)
-
     for page in reader.pages:
-
         page_text = page.extract_text()
 
         if page_text:
-
             text += page_text + "\n"
 
     return text
 
 
-# =========================================================
-# DOCX TEXT EXTRACTION
-# =========================================================
-
 def extract_docx(file):
-
     document = Document(file)
 
-    paragraphs = []
+    text = ""
 
     for paragraph in document.paragraphs:
+        text += paragraph.text + "\n"
 
-        if paragraph.text.strip():
+    return text
 
-            paragraphs.append(
-                paragraph.text
-            )
-
-    return "\n".join(paragraphs)
-
-
-# =========================================================
-# TXT TEXT EXTRACTION
-# =========================================================
 
 def extract_txt(file):
-
-    return file.read().decode(
-        "utf-8",
-        errors="ignore"
-    )
+    return file.read().decode("utf-8")
 
 
 # =========================================================
-# GENERAL TEXT EXTRACTION
+# TEXT CLEANING
 # =========================================================
 
-def extract_text(file):
-
-    filename = file.name.lower()
-
-    if filename.endswith(".pdf"):
-
-        return extract_pdf(file)
-
-    elif filename.endswith(".docx"):
-
-        return extract_docx(file)
-
-    elif filename.endswith(".txt"):
-
-        return extract_txt(file)
-
-    return ""
+def clean_text(text):
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
 
 
 # =========================================================
-# TEXT CHUNKING
+# CHUNKING
 # =========================================================
 
 def create_chunks(
@@ -224,37 +172,31 @@ def create_chunks(
     chunk_size=700,
     overlap=100
 ):
-
     words = text.split()
 
     chunks = []
 
     start = 0
 
-    step = chunk_size - overlap
-
     while start < len(words):
 
         end = start + chunk_size
 
-        chunk = " ".join(
-            words[start:end]
-        )
+        chunk = " ".join(words[start:end])
 
         if chunk.strip():
-
             chunks.append(chunk)
 
-        start += step
+        start += chunk_size - overlap
 
     return chunks
 
 
 # =========================================================
-# CREATE EMBEDDINGS
+# BUILD VECTOR DATABASE
 # =========================================================
 
-def create_embeddings(chunks):
+def build_vector_database(chunks):
 
     embeddings = embedding_model.encode(
         chunks,
@@ -262,151 +204,340 @@ def create_embeddings(chunks):
         normalize_embeddings=True
     )
 
-    return embeddings.astype(
-        "float32"
-    )
-
-
-# =========================================================
-# CREATE FAISS INDEX
-# =========================================================
-
-def create_faiss_index(chunks):
-
-    embeddings = create_embeddings(
-        chunks
-    )
-
     dimension = embeddings.shape[1]
 
-    index = faiss.IndexFlatIP(
-        dimension
-    )
+    index = faiss.IndexFlatIP(dimension)
 
-    index.add(
-        embeddings
-    )
+    index.add(embeddings.astype("float32"))
 
-    return index
+    return index, embeddings
 
 
 # =========================================================
-# RETRIEVE RELEVANT CHUNKS
+# RAG SEARCH TOOL
 # =========================================================
 
-def retrieve_chunks(
-    question,
-    top_k=4
-):
+def rag_search(query, top_k=4):
 
-    question_embedding = embedding_model.encode(
-        [question],
+    if (
+        st.session_state.index is None
+        or not st.session_state.chunks
+    ):
+        return []
+
+    query_embedding = embedding_model.encode(
+        [query],
         convert_to_numpy=True,
         normalize_embeddings=True
     )
 
-    question_embedding = question_embedding.astype(
-        "float32"
-    )
-
-    distances, indices = (
-        st.session_state.faiss_index.search(
-            question_embedding,
-            top_k
-        )
+    scores, indices = st.session_state.index.search(
+        query_embedding.astype("float32"),
+        top_k
     )
 
     results = []
 
-    scores = []
+    for score, index in zip(scores[0], indices[0]):
 
-    for score, index in zip(
-        distances[0],
-        indices[0]
-    ):
+        if index == -1:
+            continue
 
-        if index != -1:
+        results.append(
+            {
+                "chunk": st.session_state.chunks[index],
+                "score": float(score),
+                "index": int(index)
+            }
+        )
 
-            results.append(
-                st.session_state.chunks[index]
-            )
-
-            scores.append(
-                float(score)
-            )
-
-    return results, scores
+    return results
 
 
 # =========================================================
-# GENERATE ANSWER WITH GROQ
+# CALCULATOR TOOL
 # =========================================================
 
-def generate_answer(
-    question,
-    retrieved_chunks
-):
+def calculator(expression):
 
-    context = "\n\n".join(
-        retrieved_chunks
+    try:
+
+        expression = expression.strip()
+
+        # Allow only mathematical characters
+        if not re.fullmatch(
+            r"[0-9+\-*/().%\s]+",
+            expression
+        ):
+            return "Invalid mathematical expression."
+
+        # Convert percentage
+        expression = expression.replace("%", "/100")
+
+        result = eval(
+            expression,
+            {"__builtins__": None},
+            {}
+        )
+
+        return str(result)
+
+    except Exception:
+        return "Could not calculate the expression."
+
+
+# =========================================================
+# TOOL DEFINITIONS
+# =========================================================
+
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "rag_search",
+            "description": (
+                "Search the uploaded documents for relevant "
+                "information. Use this when the user's question "
+                "requires information from the uploaded document."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": (
+                            "The search query to find relevant "
+                            "information in the document."
+                        )
+                    }
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "calculator",
+            "description": (
+                "Perform mathematical calculations. Use this "
+                "when the user asks for arithmetic or numerical "
+                "calculation."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "expression": {
+                        "type": "string",
+                        "description": (
+                            "Mathematical expression such as "
+                            "25 * 4 or (100 + 50) / 3."
+                        )
+                    }
+                },
+                "required": ["expression"]
+            }
+        }
+    }
+]
+
+
+# =========================================================
+# EXECUTE TOOL
+# =========================================================
+
+def execute_tool(tool_name, arguments):
+
+    if tool_name == "rag_search":
+
+        query = arguments.get("query", "")
+
+        results = rag_search(
+            query,
+            top_k=4
+        )
+
+        if not results:
+            return "No relevant information was found."
+
+        output = []
+
+        for i, result in enumerate(results, start=1):
+
+            output.append(
+                f"Result {i} "
+                f"(similarity: {result['score']:.3f}):\n"
+                f"{result['chunk']}"
+            )
+
+        return "\n\n".join(output)
+
+    elif tool_name == "calculator":
+
+        expression = arguments.get(
+            "expression",
+            ""
+        )
+
+        return calculator(expression)
+
+    return "Unknown tool."
+
+
+# =========================================================
+# AGENT / TOOL CALLING
+# =========================================================
+
+def ask_agent(user_question):
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are an intelligent AI assistant. "
+                "You have access to two tools: "
+                "RAG document search and calculator. "
+                "\n\n"
+                "Use RAG search when the answer depends on "
+                "the uploaded document. "
+                "\n\n"
+                "Use calculator when mathematical calculation "
+                "is required. "
+                "\n\n"
+                "You may use tools when necessary. "
+                "After receiving tool results, provide a clear "
+                "final answer to the user."
+            )
+        }
+    ]
+
+    # Add conversation history
+    for message in st.session_state.messages[-6:]:
+
+        messages.append(
+            {
+                "role": message["role"],
+                "content": message["content"]
+            }
+        )
+
+    messages.append(
+        {
+            "role": "user",
+            "content": user_question
+        }
     )
 
-    prompt = f"""
-You are an AI university study assistant.
-
-Answer the student's question using the
-provided document context.
-
-IMPORTANT RULES:
-
-1. Use the provided context as the main source.
-2. Do not invent information.
-3. If the answer is not present in the
-   provided context, say that the information
-   was not found in the uploaded document.
-4. Explain concepts in simple,
-   student-friendly language.
-5. Give a direct answer first.
-6. Use bullet points when useful.
-
-DOCUMENT CONTEXT:
-=================
-
-{context}
-
-=================
-
-STUDENT QUESTION:
-
-{question}
-
-Now provide the answer.
-"""
+    # =====================================================
+    # FIRST AI REQUEST
+    # =====================================================
 
     response = client.chat.completions.create(
 
         model="openai/gpt-oss-120b",
 
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You are a helpful university "
-                    "study assistant."
-                )
-            },
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ],
+        messages=messages,
+
+        tools=tools,
+
+        tool_choice="auto",
 
         temperature=0.2,
 
         max_tokens=1200
     )
 
-    return response.choices[0].message.content
+    assistant_message = response.choices[0].message
+
+    # =====================================================
+    # NO TOOL REQUIRED
+    # =====================================================
+
+    if not assistant_message.tool_calls:
+
+        return assistant_message.content, []
+
+
+    # =====================================================
+    # TOOL CALLS
+    # =====================================================
+
+    messages.append(
+        {
+            "role": "assistant",
+            "content": assistant_message.content or "",
+            "tool_calls": [
+                {
+                    "id": tool_call.id,
+                    "type": "function",
+                    "function": {
+                        "name": tool_call.function.name,
+                        "arguments": tool_call.function.arguments
+                    }
+                }
+                for tool_call in assistant_message.tool_calls
+            ]
+        }
+    )
+
+    tool_results = []
+
+    # =====================================================
+    # EXECUTE EACH TOOL
+    # =====================================================
+
+    for tool_call in assistant_message.tool_calls:
+
+        tool_name = tool_call.function.name
+
+        arguments = tool_call.function.arguments
+
+        import json
+
+        try:
+            arguments = json.loads(arguments)
+        except Exception:
+            arguments = {}
+
+        result = execute_tool(
+            tool_name,
+            arguments
+        )
+
+        tool_results.append(
+            {
+                "tool": tool_name,
+                "arguments": arguments,
+                "result": result
+            }
+        )
+
+        messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": tool_call.id,
+                "content": result
+            }
+        )
+
+    # =====================================================
+    # SECOND AI REQUEST
+    # =====================================================
+
+    final_response = client.chat.completions.create(
+
+        model="openai/gpt-oss-120b",
+
+        messages=messages,
+
+        temperature=0.2,
+
+        max_tokens=1200
+    )
+
+    final_answer = final_response.choices[0].message.content
+
+    return final_answer, tool_results
 
 
 # =========================================================
@@ -415,336 +546,304 @@ Now provide the answer.
 
 with st.sidebar:
 
-    st.header("📚 Document")
-
-    uploaded_file = st.file_uploader(
-        "Upload your study material",
-        type=[
-            "pdf",
-            "docx",
-            "txt"
-        ]
-    )
-
-    if uploaded_file:
-
-        if st.button(
-            "🔎 Process Document",
-            use_container_width=True
-        ):
-
-            with st.spinner(
-                "Processing your document..."
-            ):
-
-                try:
-
-                    # Extract text
-
-                    text = extract_text(
-                        uploaded_file
-                    )
-
-                    if not text.strip():
-
-                        st.error(
-                            "No readable text was found "
-                            "in this document."
-                        )
-
-                    else:
-
-                        # Create chunks
-
-                        chunks = create_chunks(
-                            text
-                        )
-
-                        if not chunks:
-
-                            st.error(
-                                "Could not create document chunks."
-                            )
-
-                        else:
-
-                            # Create FAISS index
-
-                            index = create_faiss_index(
-                                chunks
-                            )
-
-                            # Save everything
-
-                            st.session_state.chunks = (
-                                chunks
-                            )
-
-                            st.session_state.faiss_index = (
-                                index
-                            )
-
-                            st.session_state.document_name = (
-                                uploaded_file.name
-                            )
-
-                            st.success(
-                                "Document processed successfully!"
-                            )
-
-                            st.info(
-                                f"Created {len(chunks)} chunks."
-                            )
-
-                except Exception as e:
-
-                    st.error(
-                        f"Error processing document: {e}"
-                    )
-
-    # -----------------------------------------------------
-    # DOCUMENT INFORMATION
-    # -----------------------------------------------------
-
-    if st.session_state.document_name:
-
-        st.divider()
-
-        st.subheader(
-            "📊 Document Information"
-        )
-
-        st.write(
-            f"**File:** "
-            f"{st.session_state.document_name}"
-        )
-
-        st.write(
-            f"**Chunks:** "
-            f"{len(st.session_state.chunks)}"
-        )
-
-        st.write(
-            "**Vector Database:** FAISS"
-        )
-
-        st.write(
-            "**Embedding Model:** "
-            "all-MiniLM-L6-v2"
-        )
-
-        st.write(
-            "**LLM:** Groq"
-        )
-
-
-# =========================================================
-# MAIN QUESTION AREA
-# =========================================================
-
-st.header(
-    "🔍 Ask Questions From Your Document"
-)
-
-
-if st.session_state.faiss_index is None:
-
-    st.info(
-        "👈 Upload a PDF, DOCX, or TXT file "
-        "from the sidebar and process it first."
-    )
-
-else:
-
-    question = st.text_area(
-        "Ask a question:",
-        placeholder=(
-            "Example: What is deadlock?"
-        ),
-        height=100
-    )
+    st.header("⚙️ RAG Settings")
 
     top_k = st.slider(
-        "Number of relevant chunks to retrieve",
+        "Retrieved chunks",
         min_value=1,
         max_value=8,
         value=4
     )
 
-    if st.button(
-        "🤖 Ask AI",
-        type="primary",
-        use_container_width=True
-    ):
+    st.divider()
 
-        if not question.strip():
+    st.header("📄 Document")
 
-            st.warning(
-                "Please enter a question."
-            )
+    uploaded_file = st.file_uploader(
+        "Upload PDF, DOCX or TXT",
+        type=["pdf", "docx", "txt"]
+    )
 
-        else:
+    if uploaded_file:
 
-            try:
+        st.write(
+            f"**File:** {uploaded_file.name}"
+        )
 
-                # -----------------------------------------
-                # RETRIEVAL
-                # -----------------------------------------
+        process_button = st.button(
+            "🔄 Process Document",
+            use_container_width=True
+        )
 
-                with st.spinner(
-                    "🔎 Searching your document..."
-                ):
+        if process_button:
 
-                    retrieved_chunks, scores = (
-                        retrieve_chunks(
-                            question,
-                            top_k
-                        )
-                    )
+            with st.spinner(
+                "Reading and indexing document..."
+            ):
 
-                if not retrieved_chunks:
+                try:
 
-                    st.warning(
-                        "No relevant information was found."
-                    )
-
-                else:
-
-                    # -------------------------------------
-                    # GENERATION
-                    # -------------------------------------
-
-                    with st.spinner(
-                        "🤖 Generating answer with Groq..."
+                    if uploaded_file.name.lower().endswith(
+                        ".pdf"
                     ):
-
-                        answer = generate_answer(
-                            question,
-                            retrieved_chunks
+                        text = extract_pdf(
+                            uploaded_file
                         )
 
-                    # -------------------------------------
-                    # ANSWER
-                    # -------------------------------------
-
-                    st.subheader(
-                        "💡 Answer"
-                    )
-
-                    st.markdown(
-                        f"""
-                        <div class="answer-box">
-                        {answer}
-                        </div>
-                        """,
-                        unsafe_allow_html=True
-                    )
-
-                    # -------------------------------------
-                    # RETRIEVED CONTEXT
-                    # -------------------------------------
-
-                    with st.expander(
-                        "🔎 View Retrieved Chunks"
+                    elif uploaded_file.name.lower().endswith(
+                        ".docx"
                     ):
+                        text = extract_docx(
+                            uploaded_file
+                        )
 
-                        for i, (
-                            chunk,
-                            score
-                        ) in enumerate(
-                            zip(
-                                retrieved_chunks,
-                                scores
-                            ),
-                            start=1
-                        ):
+                    else:
+                        text = extract_txt(
+                            uploaded_file
+                        )
 
-                            st.markdown(
-                                f"### Chunk {i}"
+                    text = clean_text(text)
+
+                    if not text:
+
+                        st.error(
+                            "No readable text found."
+                        )
+
+                    else:
+
+                        chunks = create_chunks(
+                            text
+                        )
+
+                        index, embeddings = (
+                            build_vector_database(
+                                chunks
                             )
+                        )
 
-                            st.caption(
-                                f"Similarity score: "
-                                f"{score:.4f}"
-                            )
+                        st.session_state.chunks = chunks
 
-                            st.markdown(
-                                f"""
-                                <div class="chunk-box">
-                                {chunk}
-                                </div>
-                                """,
-                                unsafe_allow_html=True
-                            )
+                        st.session_state.embeddings = (
+                            embeddings
+                        )
 
-            except Exception as e:
+                        st.session_state.index = index
 
-                st.error(
-                    f"AI request failed: {e}"
-                )
+                        st.session_state.document_name = (
+                            uploaded_file.name
+                        )
+
+                        st.success(
+                            "Document indexed successfully!"
+                        )
+
+                except Exception as e:
+
+                    st.error(
+                        f"Processing error: {e}"
+                    )
+
+    # =====================================================
+    # TOOL STATUS
+    # =====================================================
+
+    st.divider()
+
+    st.header("🛠️ Available Tools")
+
+    st.success("🔎 RAG Search")
+
+    st.success("🧮 Calculator")
+
+    st.divider()
+
+    if st.session_state.index is not None:
+
+        st.info(
+            f"Document: "
+            f"{st.session_state.document_name}\n\n"
+            f"Chunks: "
+            f"{len(st.session_state.chunks)}"
+        )
+
+    else:
+
+        st.warning(
+            "Upload and process a document first."
+        )
 
 
 # =========================================================
-# RAG PIPELINE INFORMATION
+# MAIN TOOL EXPLANATION
 # =========================================================
 
-st.divider()
-
-st.subheader(
-    "🧠 How This RAG System Works"
-)
-
-col1, col2, col3, col4, col5 = st.columns(5)
+col1, col2 = st.columns(2)
 
 with col1:
 
-    st.write("📄 **1. Document**")
+    st.markdown(
+        """
+        ### 🔎 RAG Search
 
-    st.caption(
-        "Upload PDF, DOCX or TXT"
+        The AI can search your uploaded document when
+        it needs external knowledge.
+        """
     )
 
 with col2:
 
-    st.write("✂️ **2. Chunking**")
+    st.markdown(
+        """
+        ### 🧮 Calculator
 
-    st.caption(
-        "Split the document"
-    )
-
-with col3:
-
-    st.write("🔢 **3. Embeddings**")
-
-    st.caption(
-        "Convert text to vectors"
-    )
-
-with col4:
-
-    st.write("🔍 **4. Retrieval**")
-
-    st.caption(
-        "Find relevant chunks"
-    )
-
-with col5:
-
-    st.write("🤖 **5. Generation**")
-
-    st.caption(
-        "Groq generates the answer"
+        The AI can call a calculator when a numerical
+        calculation is required.
+        """
     )
 
 
 # =========================================================
-# FOOTER
+# CHAT HISTORY
 # =========================================================
 
-st.divider()
+for message in st.session_state.messages:
 
-st.caption(
-    "AI RAG Lab • "
-    "Document → Chunks → Embeddings → FAISS → "
-    "Retrieval → Groq → Answer"
+    with st.chat_message(
+        message["role"]
+    ):
+
+        st.markdown(
+            message["content"]
+        )
+
+        if (
+            message["role"] == "assistant"
+            and message.get("tools")
+        ):
+
+            with st.expander(
+                "🛠️ Tool activity"
+            ):
+
+                for tool in message["tools"]:
+
+                    st.write(
+                        f"**Tool:** {tool['tool']}"
+                    )
+
+                    st.write(
+                        f"**Arguments:** "
+                        f"{tool['arguments']}"
+                    )
+
+                    st.write(
+                        f"**Result:** "
+                        f"{tool['result']}"
+                    )
+
+
+# =========================================================
+# CHAT INPUT
+# =========================================================
+
+user_question = st.chat_input(
+    "Ask something..."
 )
+
+
+if user_question:
+
+    # -----------------------------------------------------
+    # USER MESSAGE
+    # -----------------------------------------------------
+
+    st.session_state.messages.append(
+        {
+            "role": "user",
+            "content": user_question
+        }
+    )
+
+    with st.chat_message("user"):
+
+        st.markdown(
+            user_question
+        )
+
+    # -----------------------------------------------------
+    # AI RESPONSE
+    # -----------------------------------------------------
+
+    with st.chat_message("assistant"):
+
+        with st.spinner(
+            "AI is thinking and selecting tools..."
+        ):
+
+            try:
+
+                answer, tool_results = ask_agent(
+                    user_question
+                )
+
+                st.markdown(
+                    answer
+                )
+
+                # -----------------------------------------
+                # TOOL ACTIVITY
+                # -----------------------------------------
+
+                if tool_results:
+
+                    with st.expander(
+                        "🛠️ Tool activity"
+                    ):
+
+                        for tool in tool_results:
+
+                            st.write(
+                                f"**Tool:** "
+                                f"{tool['tool']}"
+                            )
+
+                            st.write(
+                                f"**Arguments:** "
+                                f"{tool['arguments']}"
+                            )
+
+                            st.write(
+                                f"**Result:** "
+                                f"{tool['result']}"
+                            )
+
+                # -----------------------------------------
+                # SAVE ASSISTANT MESSAGE
+                # -----------------------------------------
+
+                st.session_state.messages.append(
+                    {
+                        "role": "assistant",
+                        "content": answer,
+                        "tools": tool_results
+                    }
+                )
+
+            except Exception as e:
+
+                error_message = (
+                    f"AI request failed: {e}"
+                )
+
+                st.error(
+                    error_message
+                )
+
+                st.session_state.messages.append(
+                    {
+                        "role": "assistant",
+                        "content": error_message,
+                        "tools": []
+                    }
+                )
